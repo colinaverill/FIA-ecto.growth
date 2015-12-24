@@ -27,7 +27,10 @@ lat.bounds = c(-999,999)
 
 file.pft = " require_products_utilities/gcbPFT.csv" #changed to actually find this file within the repo.
 
-file.out = "mycFIA.out.rds" #changed the name of the output file. 
+file.out = "analysis_data/mycFIA.out.rds" #changed the name of the output file. 
+
+file.soil = read.csv("FIA_soils/FIAsoil_output_CA.csv")
+length(unique(file.soils$))
 
 # -----------------------------
 # Open connection to database
@@ -35,15 +38,17 @@ fia.con = db.open(dbsettings)
 
 # ---------- PLOT & COND DATA
 # --- Query PLOT
+
 #NOTE: CA has modified this query. 
-# - All design codes in the soils are equivalent to designcd=1. This constraint has been removed. 
-# - All states are allowed. statecd<=56 has been removed. 
+# 1. I have remove lat/long constraints. 
+# 2. keeping statecd <=56, this excludes island states, (challenging to include in this spatial analysis)
+# 3. Including all plots, whether remeasured or not. Killing REMPER constraint. We will want growth and distribution analyses.
+# 4. Including all designcd values, then filtering by all designcd values in the soils database. 
+
 cat("Query PLOT...\n")
 query = paste('SELECT 
-              cn, statecd, prev_plt_cn, remper, lat, lon, elev
-              FROM plot WHERE remper>3 AND remper<9.5 AND designcd=1 AND statecd<=56 AND ',
-              'lon>', min(lon.bounds),' AND lon<', max(lon.bounds), ' AND ',
-              'lat>', min(lat.bounds),' AND lat<', max(lat.bounds))
+              cn, statecd, prev_plt_cn, remper, lat, lon, elev, designcd
+              FROM plot WHERE  statecd<=56')
 
 tic() # ~10 sec
 PLOT = as.data.table(db.query(query, con=fia.con))
@@ -51,12 +56,20 @@ setnames(PLOT, toupper(names(PLOT)))
 setnames(PLOT,"CN","PLT_CN")
 toc()
 
-# Remove states that haven't been resurveyed
-#CA: this is already addressed in the query. These lines do nothing. 
-PLOT[, REMPERTOT := sumNA(REMPER), by=STATECD]
-PLOT = PLOT[ REMPERTOT>10, ]
+#determine the design codes within the soils data base. All of these will be allowed in the tree growth data set. 
+#this removes ~ half of the observations in PLOT, but retains all soil observations. 
+soil.codes <- PLOT[PLT_CN %in% file.soil$PLT_CN]
+soil.codes <- unique(soil.codes$DESIGNCD)
+PLOT       <- PLOT[DESIGNCD %in% soil.codes]
+
+
+# Remove states that haven't been resurveyed -TA/RK
+#CA- lets retain these for now. No need to remove by state. When we isolate remeasurement values we will subset by anything that has been remeasured. 
+#PLOT[, REMPERTOT := sumNA(REMPER), by=STATECD]
+#PLOT = PLOT[ REMPERTOT>10, ]
 
 # Remove this one miscellaneous plot, per TA
+# CA says, why not. 
 PLOT = PLOT[ PLT_CN!= 134680578010854 ]
 
 # Store statecd and state names
@@ -67,6 +80,9 @@ state.names = surv$statenm[match(states,surv$statecd)]
 
 
 # --- Query COND ~1 minute.
+#CA has rechecked. this is chill.
+#stdorgcd=0 removes sites that have "clear evidence of artificial regeneration". 
+
 cat("Query COND...\n")
 query = paste('SELECT 
               plt_cn, condid, stdorgcd
@@ -80,6 +96,11 @@ setnames(COND, toupper(names(COND)))
 toc()
 
 # Remove all plots with more than 1 condition
+
+###PICK BACK UP###
+# CA: I want to keep any plot that has condition 1. It can have multiple conditions, but its fine if some subplots are not forested. 
+# Colin- you need to re-understand your modification to the old code and then decide if you can apply it here. 
+
 COND[, CONmax := maxNA(CONDID), by=PLT_CN]
 # *** RK: This is slightly wrong. In a few cases plots have CONDID>1, but still only have a single condition. This would work better:
 #     COND[, CONmax2 := .N, by=PLT_CN]
